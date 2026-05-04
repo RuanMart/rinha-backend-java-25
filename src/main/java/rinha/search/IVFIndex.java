@@ -4,7 +4,6 @@ import rinha.config.Config;
 
 import java.io.DataInputStream;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public final class IVFIndex {
@@ -14,14 +13,14 @@ public final class IVFIndex {
     private final int dims;
     private final int[] clusterOffsets;
     private final float[] centroids;
-    private final ByteBuffer vectors;
+    private final byte[] vectors;
     private final byte[] labels;
 
     private volatile boolean ready = false;
 
     public IVFIndex(int numVectors, int numClusters, int dims,
                     int[] clusterOffsets, float[] centroids,
-                    ByteBuffer vectors, byte[] labels) {
+                    byte[] vectors, byte[] labels) {
         this.numVectors = numVectors;
         this.numClusters = numClusters;
         this.dims = dims;
@@ -79,8 +78,8 @@ public final class IVFIndex {
             int end = clusterOffsets[cluster + 1];
 
             for (int i = start; i < end; i++) {
-                int vOffset = i * dims * 2;
-                double dist = Distance.euclideanBB(query, vectors, vOffset, dims);
+                int vOffset = i * dims;
+                double dist = Distance.euclideanByte(query, vectors, vOffset, dims);
 
                 if (dist < bestDists[k - 1]) {
                     int insertPos = k - 1;
@@ -121,16 +120,14 @@ public final class IVFIndex {
                 centroids[i] = dis.readFloat();
             }
 
-            int vectorsBytes = numVectors * dims * 2;
-            byte[] vectorsRaw = new byte[vectorsBytes];
-            dis.readFully(vectorsRaw);
-            ByteBuffer vectorsBuf = ByteBuffer.wrap(vectorsRaw);
+            byte[] vectors = new byte[numVectors * dims];
+            dis.readFully(vectors);
 
             byte[] labels = new byte[numVectors];
             dis.readFully(labels);
 
             return new IVFIndex(numVectors, numClusters, dims,
-                    clusterOffsets, centroids, vectorsBuf, labels);
+                    clusterOffsets, centroids, vectors, labels);
         }
     }
 

@@ -12,6 +12,8 @@ import java.util.stream.Collectors;
 
 public final class Vectorizer {
 
+    private static final Set<String> EMPTY_SET = Set.of();
+
     private final Config config;
 
     public Vectorizer(Config config) {
@@ -23,7 +25,9 @@ public final class Vectorizer {
 
         v[0] = Config.clamp(req.transaction.amount / Config.MAX_AMOUNT);
         v[1] = Config.clamp((double) req.transaction.installments / Config.MAX_INSTALLMENTS);
-        v[2] = Config.clamp((req.transaction.amount / req.customer.avg_amount) / Config.AMOUNT_VS_AVG_RATIO);
+
+        double avgAmount = req.customer.avg_amount;
+        v[2] = avgAmount > 0 ? Config.clamp((req.transaction.amount / avgAmount) / Config.AMOUNT_VS_AVG_RATIO) : 1.0;
 
         ZonedDateTime requestedAt = ZonedDateTime.parse(req.transaction.requested_at);
         v[3] = requestedAt.getHour() / 23.0;
@@ -40,7 +44,7 @@ public final class Vectorizer {
         };
         v[4] = dowIndex / 6.0;
 
-        if (req.last_transaction != null) {
+        if (req.last_transaction != null && req.last_transaction.timestamp != null) {
             ZonedDateTime lastTs = ZonedDateTime.parse(req.last_transaction.timestamp);
             long minutes = ChronoUnit.MINUTES.between(lastTs, requestedAt);
             v[5] = Config.clamp((double) minutes / Config.MAX_MINUTES);
@@ -55,7 +59,8 @@ public final class Vectorizer {
         v[9] = req.terminal.is_online ? 1.0 : 0.0;
         v[10] = req.terminal.card_present ? 1.0 : 0.0;
 
-        Set<String> known = req.customer.known_merchants.stream().collect(Collectors.toSet());
+        List<String> knownList = req.customer.known_merchants;
+        Set<String> known = knownList != null ? knownList.stream().collect(Collectors.toSet()) : EMPTY_SET;
         v[11] = known.contains(req.merchant.id) ? 0.0 : 1.0;
 
         v[12] = config.getMccRisk(req.merchant.mcc);

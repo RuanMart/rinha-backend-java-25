@@ -21,6 +21,7 @@ import java.util.concurrent.Executors;
 public final class Main {
 
     private static final Gson GSON = new GsonBuilder().create();
+    private static final byte[] FALLBACK_BYTES = "{\"approved\":true,\"fraud_score\":0.0}".getBytes(StandardCharsets.UTF_8);
     private static Config config;
     private static Vectorizer vectorizer;
     private static IVFIndex index;
@@ -45,7 +46,7 @@ public final class Main {
         long elapsed = System.currentTimeMillis() - start;
         System.out.println("IVF index loaded in " + elapsed + "ms");
 
-        HttpServer server = HttpServer.create(new InetSocketAddress(Config.PORT), 0);
+        HttpServer server = HttpServer.create(new InetSocketAddress(Config.PORT), 4096);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 
         server.createContext("/ready", Main::handleReady);
@@ -79,8 +80,9 @@ public final class Main {
                 request = GSON.fromJson(reader, FraudRequest.class);
             }
 
-            if (request == null || request.transaction == null) {
-                sendResponse(exchange, 400, "Bad Request");
+            if (request == null || request.transaction == null
+                    || request.customer == null || request.merchant == null || request.terminal == null) {
+                sendFallback(exchange);
                 return;
             }
 
@@ -97,18 +99,20 @@ public final class Main {
                 os.write(bytes);
             }
         } catch (Exception e) {
-            try {
-                FraudResponse fallback = new FraudResponse(true, 0.0);
-                byte[] bytes = GSON.toJson(fallback).getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(bytes);
-                }
-            } catch (Exception ignored) {
-            }
+            sendFallback(exchange);
         } finally {
             exchange.close();
+        }
+    }
+
+    private static void sendFallback(HttpExchange exchange) {
+        try {
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, FALLBACK_BYTES.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(FALLBACK_BYTES);
+            }
+        } catch (Exception ignored) {
         }
     }
 

@@ -66,12 +66,13 @@ public final class DataPreprocessor {
             clusterOffsets[c + 1] += clusterOffsets[c];
         }
 
-        short[] sortedVectors = new short[numVectors * DIMS];
+        byte[] sortedVectors = new byte[numVectors * DIMS];
         byte[] sortedLabels = new byte[numVectors];
         for (int i = 0; i < numVectors; i++) {
             int srcIdx = order[i];
             for (int d = 0; d < DIMS; d++) {
-                sortedVectors[i * DIMS + d] = (short) Math.round(vectors[srcIdx][d] * 10000);
+                int quantized = (int) Math.round(vectors[srcIdx][d] * 100);
+                sortedVectors[i * DIMS + d] = (byte) Math.max(-128, Math.min(127, quantized));
             }
             sortedLabels[i] = labels[srcIdx];
         }
@@ -92,9 +93,7 @@ public final class DataPreprocessor {
                 }
             }
 
-            for (int i = 0; i < sortedVectors.length; i++) {
-                dos.writeShort(sortedVectors[i]);
-            }
+            dos.write(sortedVectors);
 
             dos.write(sortedLabels);
         }
@@ -103,7 +102,7 @@ public final class DataPreprocessor {
         System.out.println("  Vectors: " + numVectors);
         System.out.println("  Clusters: " + NUM_CLUSTERS);
         System.out.println("  Dimensions: " + DIMS);
-        System.out.println("  Vector data: " + (numVectors * DIMS * 2 / 1024 / 1024) + " MB");
+        System.out.println("  Vector data: " + (numVectors * DIMS / 1024 / 1024) + " MB");
         System.out.println("  Labels: " + (numVectors / 1024 / 1024) + " MB");
     }
 
