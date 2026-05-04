@@ -1,10 +1,8 @@
 package rinha;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import rinha.config.Config;
 import rinha.model.FraudRequest;
-import rinha.model.FraudResponse;
+import rinha.model.JsonParser;
 import rinha.search.IVFIndex;
 import rinha.vector.Vectorizer;
 
@@ -17,16 +15,15 @@ import java.util.concurrent.Semaphore;
 
 public final class Main {
 
-    private static final Gson GSON = new GsonBuilder().create();
-    private static final byte[] FALLBACK_JSON = "{\"approved\":true,\"fraud_score\":0.0}".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HTTP_OK_HDR = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".getBytes(StandardCharsets.UTF_8);
     private static final byte[] CRLFCRLF = {'\r', '\n', '\r', '\n'};
     private static final byte[] READY_OK = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".getBytes(StandardCharsets.UTF_8);
     private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_ALLOWED = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] SHED_RESPONSE = buildResponse(FALLBACK_JSON);
-    private static final Semaphore GATE = new Semaphore(Runtime.getRuntime().availableProcessors() * 5);
+
+    private static final byte[][] SCORED = buildScoredResponses();
+    private static final Semaphore GATE = new Semaphore(Runtime.getRuntime().availableProcessors() * 4);
 
     private static Config config;
     private static Vectorizer vectorizer;
@@ -61,14 +58,30 @@ public final class Main {
         }
     }
 
+    private static byte[][] buildScoredResponses() {
+        String[] jsons = {
+            "{\"approved\":true,\"fraud_score\":0.0}",
+            "{\"approved\":true,\"fraud_score\":0.2}",
+            "{\"approved\":true,\"fraud_score\":0.4}",
+            "{\"approved\":false,\"fraud_score\":0.6}",
+            "{\"approved\":false,\"fraud_score\":0.8}",
+            "{\"approved\":false,\"fraud_score\":1.0}"
+        };
+        byte[][] res = new byte[6][];
+        for (int i = 0; i < 6; i++) {
+            res[i] = buildResponse(jsons[i].getBytes(StandardCharsets.UTF_8));
+        }
+        return res;
+    }
+
     private static void handleConnection(Socket socket) {
         try (socket) {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(5000);
             var in = socket.getInputStream();
-            var out = new BufferedOutputStream(socket.getOutputStream());
+            var out = socket.getOutputStream();
 
-            byte[] buf = new byte[16384];
+            byte[] buf = new byte[4096];
             int pos = 0;
 
             for (;;) {
@@ -136,21 +149,21 @@ public final class Main {
 
     private static void processFraud(byte[] buf, int off, int len, java.io.OutputStream out) throws Exception {
         if (!GATE.tryAcquire()) {
-            out.write(SHED_RESPONSE);
+            out.write(SCORED[0]);
             return;
         }
         try {
-            byte[] jsonBytes;
+            byte[] resp;
             try {
-                FraudRequest req = GSON.fromJson(new String(buf, off, len, StandardCharsets.UTF_8), FraudRequest.class);
-                double score = index.searchCentroidScore(vectorizer.vectorize(req));
-                jsonBytes = GSON.toJson(new FraudResponse(score < Config.FRAUD_THRESHOLD, score)).getBytes(StandardCharsets.UTF_8);
+                FraudRequest req = JsonParser.parse(new String(buf, off, len, StandardCharsets.UTF_8));
+                int fraudCount = index.search(vectorizer.vectorize(req));
+                resp = SCORED[fraudCount];
             } catch (Exception e) {
-                jsonBytes = FALLBACK_JSON;
+                resp = SCORED[0];
             }
-            out.write(buildResponse(jsonBytes));
+            out.write(resp);
         } catch (Exception e) {
-            out.write(SHED_RESPONSE);
+            out.write(SCORED[0]);
         } finally {
             GATE.release();
         }

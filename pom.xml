@@ -116,7 +116,7 @@
                         <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                         <buildArg>-O2</buildArg>
                         <buildArg>--initialize-at-build-time=gson</buildArg>
-                        <buildArg>-R:MaxHeapSize=128m</buildArg>
+                        <buildArg>-R:MaxHeapSize=96m</buildArg>
 
                     </buildArgs>
                 </configuration>
