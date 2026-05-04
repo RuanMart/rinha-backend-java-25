@@ -13,6 +13,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Semaphore;
 
 public final class Main {
 
@@ -24,6 +25,8 @@ public final class Main {
     private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_ALLOWED = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] SHED_RESPONSE = buildResponse(FALLBACK_JSON);
+    private static final Semaphore GATE = new Semaphore(Runtime.getRuntime().availableProcessors() * 5);
 
     private static Config config;
     private static Vectorizer vectorizer;
@@ -132,40 +135,47 @@ public final class Main {
     }
 
     private static void processFraud(byte[] buf, int off, int len, java.io.OutputStream out) throws Exception {
-        byte[] jsonBytes;
-        try {
-            FraudRequest req = GSON.fromJson(new String(buf, off, len, StandardCharsets.UTF_8), FraudRequest.class);
-            double score = index.searchCentroidScore(vectorizer.vectorize(req));
-            jsonBytes = GSON.toJson(new FraudResponse(score < Config.FRAUD_THRESHOLD, score)).getBytes(StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            jsonBytes = FALLBACK_JSON;
+        if (!GATE.tryAcquire()) {
+            out.write(SHED_RESPONSE);
+            return;
         }
+        try {
+            byte[] jsonBytes;
+            try {
+                FraudRequest req = GSON.fromJson(new String(buf, off, len, StandardCharsets.UTF_8), FraudRequest.class);
+                double score = index.searchCentroidScore(vectorizer.vectorize(req));
+                jsonBytes = GSON.toJson(new FraudResponse(score < Config.FRAUD_THRESHOLD, score)).getBytes(StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                jsonBytes = FALLBACK_JSON;
+            }
+            out.write(buildResponse(jsonBytes));
+        } catch (Exception e) {
+            out.write(SHED_RESPONSE);
+        } finally {
+            GATE.release();
+        }
+    }
+
+    private static byte[] buildResponse(byte[] jsonBytes) {
         int jsonLen = jsonBytes.length;
-        if (jsonLen < 10) {
-            int total = HTTP_OK_HDR.length + 1 + jsonLen + 4;
-            byte[] resp = new byte[total];
-            int p = 0;
-            System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
+        int digits = jsonLen < 10 ? 1 : jsonLen < 100 ? 2 : 3;
+        int total = HTTP_OK_HDR.length + digits + 4 + jsonLen;
+        byte[] resp = new byte[total];
+        int p = 0;
+        System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
+        if (digits == 1) {
             resp[p++] = (byte) ('0' + jsonLen);
-            resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
-            System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
-            out.write(resp);
-        } else if (jsonLen < 100) {
-            int total = HTTP_OK_HDR.length + 2 + jsonLen + 4;
-            byte[] resp = new byte[total];
-            int p = 0;
-            System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
+        } else if (digits == 2) {
             resp[p++] = (byte) ('0' + jsonLen / 10);
             resp[p++] = (byte) ('0' + jsonLen % 10);
-            resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
-            System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
-            out.write(resp);
         } else {
-            out.write(HTTP_OK_HDR);
-            out.write(Integer.toString(jsonLen).getBytes(StandardCharsets.UTF_8));
-            out.write(CRLFCRLF);
-            out.write(jsonBytes);
+            resp[p++] = (byte) ('0' + jsonLen / 100);
+            resp[p++] = (byte) ('0' + (jsonLen / 10) % 10);
+            resp[p++] = (byte) ('0' + jsonLen % 10);
         }
+        resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
+        System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
+        return resp;
     }
 
     private static int find(byte[] buf, int from, int limit, byte[] pat) {
