@@ -1,0 +1,7 @@
+{
+    "participants": ["RuanMart"],
+    "social": ["https://github.com/RuanMart"],
+    "source-code-repo": "https://github.com/RuanMart/rinha-backend-java-25",
+    "stack": ["java", "graalvm-native-image", "nginx"],
+    "open_to_work": false
+}

@@ -1,0 +1,7 @@
+target/
+*.exe
+nb-configuration.xml
+dependency-reduced-pom.xml
+submission/
+src/main/resources/index.bin
+src/main/resources/references.json.gz
