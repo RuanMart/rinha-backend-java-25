@@ -19,7 +19,7 @@ public final class Main {
     private static final Gson GSON = new GsonBuilder().create();
     private static final byte[] FALLBACK_JSON = "{\"approved\":true,\"fraud_score\":0.0}".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HTTP_OK_HDR = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] SEP = {'\r', '\n', '\r', '\n'};
+    private static final byte[] CRLFCRLF = {'\r', '\n', '\r', '\n'};
     private static final byte[] READY_OK = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".getBytes(StandardCharsets.UTF_8);
     private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
@@ -69,14 +69,14 @@ public final class Main {
             int pos = 0;
 
             for (;;) {
-                int hdrEnd = find(buf, 0, pos, SEP);
+                int hdrEnd = find(buf, 0, pos, CRLFCRLF);
                 while (hdrEnd < 0) {
                     if (pos >= buf.length) return;
                     int n = in.read(buf, pos, buf.length - pos);
                     if (n < 0) return;
                     int from = Math.max(0, pos - 3);
                     pos += n;
-                    hdrEnd = find(buf, from, pos, SEP);
+                    hdrEnd = find(buf, from, pos, CRLFCRLF);
                 }
 
                 int bodyStart = hdrEnd + 4;
@@ -140,10 +140,32 @@ public final class Main {
         } catch (Exception e) {
             jsonBytes = FALLBACK_JSON;
         }
-        out.write(HTTP_OK_HDR);
-        out.write(Integer.toString(jsonBytes.length).getBytes(StandardCharsets.UTF_8));
-        out.write(SEP);
-        out.write(jsonBytes);
+        int jsonLen = jsonBytes.length;
+        if (jsonLen < 10) {
+            int total = HTTP_OK_HDR.length + 1 + jsonLen + 4;
+            byte[] resp = new byte[total];
+            int p = 0;
+            System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
+            resp[p++] = (byte) ('0' + jsonLen);
+            resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
+            System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
+            out.write(resp);
+        } else if (jsonLen < 100) {
+            int total = HTTP_OK_HDR.length + 2 + jsonLen + 4;
+            byte[] resp = new byte[total];
+            int p = 0;
+            System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
+            resp[p++] = (byte) ('0' + jsonLen / 10);
+            resp[p++] = (byte) ('0' + jsonLen % 10);
+            resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
+            System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
+            out.write(resp);
+        } else {
+            out.write(HTTP_OK_HDR);
+            out.write(Integer.toString(jsonLen).getBytes(StandardCharsets.UTF_8));
+            out.write(CRLFCRLF);
+            out.write(jsonBytes);
+        }
     }
 
     private static int find(byte[] buf, int from, int limit, byte[] pat) {
