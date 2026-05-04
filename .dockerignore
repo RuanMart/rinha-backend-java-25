@@ -1,4 +1,0 @@
-target/
-*.exe
-nb-configuration.xml
-.dockerignore
