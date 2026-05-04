@@ -8,6 +8,7 @@ import rinha.model.FraudResponse;
 import rinha.search.IVFIndex;
 import rinha.vector.Vectorizer;
 
+import java.io.BufferedOutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -62,7 +63,7 @@ public final class Main {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(5000);
             var in = socket.getInputStream();
-            var out = socket.getOutputStream();
+            var out = new BufferedOutputStream(socket.getOutputStream());
 
             byte[] buf = new byte[16384];
             int pos = 0;
