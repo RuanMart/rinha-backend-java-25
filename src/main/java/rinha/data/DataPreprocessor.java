@@ -37,14 +37,12 @@ public final class DataPreprocessor {
 
         float[][] vectors = new float[n][DIMS];
         byte[] labels = new byte[n];
-        int[] origIds = new int[n];
         for (int i = 0; i < n; i++) {
             RefEntry e = entries.get(i);
             for (int d = 0; d < DIMS; d++) {
                 vectors[i][d] = (float) e.vector[d];
             }
             labels[i] = (byte) ("fraud".equals(e.label) ? 1 : 0);
-            origIds[i] = i;
         }
         entries = null;
 
@@ -72,34 +70,12 @@ public final class DataPreprocessor {
 
         short[] sortedVectors = new short[n * DIMS];
         byte[] sortedLabels = new byte[n];
-        int[] sortedOrigIds = new int[n];
         for (int i = 0; i < n; i++) {
             int srcIdx = order[i];
             for (int d = 0; d < DIMS; d++) {
                 sortedVectors[i * DIMS + d] = (short) Math.round(vectors[srcIdx][d] * Config.FIX_SCALE);
             }
             sortedLabels[i] = labels[srcIdx];
-            sortedOrigIds[i] = origIds[srcIdx];
-        }
-
-        short[] bboxMin = new short[NUM_CLUSTERS * DIMS];
-        short[] bboxMax = new short[NUM_CLUSTERS * DIMS];
-        for (int c = 0; c < NUM_CLUSTERS; c++) {
-            int cOff = c * DIMS;
-            for (int d = 0; d < DIMS; d++) {
-                bboxMin[cOff + d] = Short.MAX_VALUE;
-                bboxMax[cOff + d] = Short.MIN_VALUE;
-            }
-        }
-        for (int i = 0; i < n; i++) {
-            int c = assignments[order[i]];
-            int cOff = c * DIMS;
-            int vOff = i * DIMS;
-            for (int d = 0; d < DIMS; d++) {
-                short val = sortedVectors[vOff + d];
-                if (val < bboxMin[cOff + d]) bboxMin[cOff + d] = val;
-                if (val > bboxMax[cOff + d]) bboxMax[cOff + d] = val;
-            }
         }
 
         System.out.println("Writing index to: " + outputPath);
@@ -123,18 +99,6 @@ public final class DataPreprocessor {
             dos.write(shortBuf);
 
             dos.write(sortedLabels);
-
-            byte[] intBuf = new byte[n * 4];
-            ByteBuffer.wrap(intBuf).order(ByteOrder.BIG_ENDIAN).asIntBuffer().put(sortedOrigIds);
-            dos.write(intBuf);
-
-            byte[] bboxMinBuf = new byte[NUM_CLUSTERS * DIMS * 2];
-            ByteBuffer.wrap(bboxMinBuf).order(ByteOrder.BIG_ENDIAN).asShortBuffer().put(bboxMin);
-            dos.write(bboxMinBuf);
-
-            byte[] bboxMaxBuf = new byte[NUM_CLUSTERS * DIMS * 2];
-            ByteBuffer.wrap(bboxMaxBuf).order(ByteOrder.BIG_ENDIAN).asShortBuffer().put(bboxMax);
-            dos.write(bboxMaxBuf);
         }
 
         System.out.println("Index written successfully");

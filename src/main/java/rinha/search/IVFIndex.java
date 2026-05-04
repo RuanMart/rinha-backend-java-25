@@ -10,36 +10,30 @@ public final class IVFIndex {
 
     private static final int K = 5;
     private static final int DIMS = 14;
+    private static final int NPROBE = 2;
 
     private final int numClusters;
-    private final int numVectors;
     private final short[] quantCentroids;
     private final int[] clusterOffsets;
     private final short[] vectors;
     private final byte[] labels;
-    private final int[] origIds;
-    private final short[] bboxMin;
-    private final short[] bboxMax;
 
     private volatile boolean ready = false;
 
-    public IVFIndex(int numClusters, int numVectors, short[] quantCentroids,
-                    int[] clusterOffsets, short[] vectors, byte[] labels,
-                    int[] origIds, short[] bboxMin, short[] bboxMax) {
+    public IVFIndex(int numClusters, short[] quantCentroids,
+                    int[] clusterOffsets, short[] vectors, byte[] labels) {
         this.numClusters = numClusters;
-        this.numVectors = numVectors;
         this.quantCentroids = quantCentroids;
         this.clusterOffsets = clusterOffsets;
         this.vectors = vectors;
         this.labels = labels;
-        this.origIds = origIds;
-        this.bboxMin = bboxMin;
-        this.bboxMax = bboxMax;
     }
 
     public int search(short[] query) {
-        int bestCluster = 0;
-        long bestDist = Long.MAX_VALUE;
+        int[] probeClusters = new int[NPROBE];
+        long[] probeDists = new long[NPROBE];
+        for (int i = 0; i < NPROBE; i++) probeDists[i] = Long.MAX_VALUE;
+
         for (int c = 0; c < numClusters; c++) {
             int cOff = c * DIMS;
             long dist = 0;
@@ -47,36 +41,30 @@ public final class IVFIndex {
                 int diff = query[d] - quantCentroids[cOff + d];
                 dist += (long) diff * diff;
             }
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestCluster = c;
+            for (int i = 0; i < NPROBE; i++) {
+                if (dist < probeDists[i]) {
+                    System.arraycopy(probeDists, i, probeDists, i + 1, NPROBE - 1 - i);
+                    System.arraycopy(probeClusters, i, probeClusters, i + 1, NPROBE - 1 - i);
+                    probeDists[i] = dist;
+                    probeClusters[i] = c;
+                    break;
+                }
             }
         }
 
         long[] topDist = new long[K];
         int[] topIdx = new int[K];
-        int[] topOrig = new int[K];
         for (int i = 0; i < K; i++) {
             topDist[i] = Long.MAX_VALUE;
             topIdx[i] = -1;
-            topOrig[i] = Integer.MAX_VALUE;
         }
         int worstIdx = 0;
 
-        int start = clusterOffsets[bestCluster];
-        int end = clusterOffsets[bestCluster + 1];
-        worstIdx = scanRange(start, end, query, topDist, topIdx, topOrig, worstIdx);
-
-        for (int c = 0; c < numClusters; c++) {
-            if (c == bestCluster) continue;
-
-            long worstDist = topDist[worstIdx];
-            long lb = bboxLowerBound(query, c);
-            if (lb <= worstDist) {
-                int cStart = clusterOffsets[c];
-                int cEnd = clusterOffsets[c + 1];
-                worstIdx = scanRange(cStart, cEnd, query, topDist, topIdx, topOrig, worstIdx);
-            }
+        for (int p = 0; p < NPROBE; p++) {
+            int cluster = probeClusters[p];
+            int start = clusterOffsets[cluster];
+            int end = clusterOffsets[cluster + 1];
+            worstIdx = scanRange(start, end, query, topDist, topIdx, worstIdx);
         }
 
         int fraudCount = 0;
@@ -86,26 +74,9 @@ public final class IVFIndex {
         return fraudCount;
     }
 
-    private long bboxLowerBound(short[] query, int c) {
-        int cOff = c * DIMS;
-        long lb = 0;
-        for (int d = 0; d < DIMS; d++) {
-            short qVal = query[d];
-            short minVal = bboxMin[cOff + d];
-            short maxVal = bboxMax[cOff + d];
-            int diff;
-            if (qVal < minVal) diff = minVal - qVal;
-            else if (qVal > maxVal) diff = qVal - maxVal;
-            else diff = 0;
-            lb += (long) diff * diff;
-        }
-        return lb;
-    }
-
     private int scanRange(int start, int end, short[] query,
-                          long[] topDist, int[] topIdx, int[] topOrig, int worstIdx) {
+                          long[] topDist, int[] topIdx, int worstIdx) {
         long worstDist = topDist[worstIdx];
-        int worstOrig = topOrig[worstIdx];
 
         for (int i = start; i < end; i++) {
             int vOff = i * DIMS;
@@ -120,23 +91,16 @@ public final class IVFIndex {
                 }
             }
 
-            if (!tooFar) {
-                int oid = origIds[i];
-                if (dist < worstDist || (dist == worstDist && oid < worstOrig)) {
-                    topDist[worstIdx] = dist;
-                    topIdx[worstIdx] = i;
-                    topOrig[worstIdx] = oid;
+            if (!tooFar && dist < worstDist) {
+                topDist[worstIdx] = dist;
+                topIdx[worstIdx] = i;
 
-                    worstIdx = 0;
-                    worstDist = topDist[0];
-                    worstOrig = topOrig[0];
-                    for (int j = 1; j < K; j++) {
-                        long jd = topDist[j];
-                        if (jd > worstDist || (jd == worstDist && topOrig[j] > worstOrig)) {
-                            worstIdx = j;
-                            worstDist = jd;
-                            worstOrig = topOrig[j];
-                        }
+                worstIdx = 0;
+                worstDist = topDist[0];
+                for (int j = 1; j < K; j++) {
+                    if (topDist[j] > worstDist) {
+                        worstIdx = j;
+                        worstDist = topDist[j];
                     }
                 }
             }
@@ -177,17 +141,8 @@ public final class IVFIndex {
         byte[] labels = new byte[numVectors];
         dis.readFully(labels);
 
-        int[] origIds = new int[numVectors];
-        readInts(dis, origIds);
-
-        short[] bboxMin = new short[numClusters * dims];
-        readShorts(dis, bboxMin);
-
-        short[] bboxMax = new short[numClusters * dims];
-        readShorts(dis, bboxMax);
-
-        return new IVFIndex(numClusters, numVectors, quantCentroids,
-                clusterOffsets, vectors, labels, origIds, bboxMin, bboxMax);
+        return new IVFIndex(numClusters, quantCentroids,
+                clusterOffsets, vectors, labels);
     }
 
     private static void readShorts(DataInputStream dis, short[] arr) throws Exception {
@@ -200,21 +155,6 @@ public final class IVFIndex {
             ByteBuffer.wrap(buf, 0, toRead * 2)
                     .order(ByteOrder.BIG_ENDIAN)
                     .asShortBuffer()
-                    .get(arr, offset, toRead);
-            offset += toRead;
-        }
-    }
-
-    private static void readInts(DataInputStream dis, int[] arr) throws Exception {
-        int chunkSize = 65536;
-        byte[] buf = new byte[chunkSize * 4];
-        int offset = 0;
-        while (offset < arr.length) {
-            int toRead = Math.min(chunkSize, arr.length - offset);
-            dis.readFully(buf, 0, toRead * 4);
-            ByteBuffer.wrap(buf, 0, toRead * 4)
-                    .order(ByteOrder.BIG_ENDIAN)
-                    .asIntBuffer()
                     .get(arr, offset, toRead);
             offset += toRead;
         }
