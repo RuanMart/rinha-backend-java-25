@@ -12,12 +12,10 @@ import java.util.Map;
 public final class Config {
 
     public static final int PORT = 8080;
-    public static final int KNN_K = 5;
-    public static final double FRAUD_THRESHOLD = 0.6;
-    public static final int IVF_NPROBE = 1;
-    public static final int IVF_NUM_CLUSTERS = 500;
-    public static final int IVF_KMEANS_ITERATIONS = 10;
     public static final int DIMENSIONS = 14;
+    public static final int IVF_NUM_CLUSTERS = 256;
+    public static final int IVF_KMEANS_ITERATIONS = 10;
+    public static final int FIX_SCALE = 10000;
 
     public static final double MAX_AMOUNT = 10000.0;
     public static final double MAX_INSTALLMENTS = 12.0;

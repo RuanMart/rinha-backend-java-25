@@ -5,50 +5,56 @@ import rinha.model.FraudRequest;
 
 public final class Vectorizer {
 
+    private static final int SCALE = Config.FIX_SCALE;
+
     private final Config config;
 
     public Vectorizer(Config config) {
         this.config = config;
     }
 
-    public double[] vectorize(FraudRequest req) {
-        double[] v = new double[Config.DIMENSIONS];
+    public short[] vectorize(FraudRequest req) {
+        short[] v = new short[Config.DIMENSIONS];
 
-        v[0] = Config.clamp(req.transaction.amount / Config.MAX_AMOUNT);
-        v[1] = Config.clamp((double) req.transaction.installments / Config.MAX_INSTALLMENTS);
+        v[0] = q(Config.clamp(req.transaction.amount / Config.MAX_AMOUNT));
+        v[1] = q(Config.clamp((double) req.transaction.installments / Config.MAX_INSTALLMENTS));
 
         double avgAmount = req.customer.avg_amount;
-        v[2] = avgAmount > 0 ? Config.clamp((req.transaction.amount / avgAmount) / Config.AMOUNT_VS_AVG_RATIO) : 1.0;
+        v[2] = q(avgAmount > 0 ? Config.clamp((req.transaction.amount / avgAmount) / Config.AMOUNT_VS_AVG_RATIO) : 1.0);
 
         String ra = req.transaction.requested_at;
-        v[3] = (d(ra, 11) * 10 + d(ra, 12)) / 23.0;
+        v[3] = q((d(ra, 11) * 10 + d(ra, 12)) / 23.0);
         int year = d(ra, 0) * 1000 + d(ra, 1) * 100 + d(ra, 2) * 10 + d(ra, 3);
         int month = d(ra, 5) * 10 + d(ra, 6);
         int day = d(ra, 8) * 10 + d(ra, 9);
-        v[4] = dayOfWeek(year, month, day) / 6.0;
+        v[4] = q(dayOfWeek(year, month, day) / 6.0);
 
         if (req.last_transaction != null && req.last_transaction.timestamp != null) {
             long minDelta = (epochSec(ra) - epochSec(req.last_transaction.timestamp)) / 60;
-            v[5] = Config.clamp((double) minDelta / Config.MAX_MINUTES);
-            v[6] = Config.clamp(req.last_transaction.km_from_current / Config.MAX_KM);
+            v[5] = q(Config.clamp((double) minDelta / Config.MAX_MINUTES));
+            v[6] = q(Config.clamp(req.last_transaction.km_from_current / Config.MAX_KM));
         } else {
-            v[5] = -1.0;
-            v[6] = -1.0;
+            v[5] = (short) -SCALE;
+            v[6] = (short) -SCALE;
         }
 
-        v[7] = Config.clamp(req.terminal.km_from_home / Config.MAX_KM);
-        v[8] = Config.clamp((double) req.customer.tx_count_24h / Config.MAX_TX_COUNT_24H);
-        v[9] = req.terminal.is_online ? 1.0 : 0.0;
-        v[10] = req.terminal.card_present ? 1.0 : 0.0;
+        v[7] = q(Config.clamp(req.terminal.km_from_home / Config.MAX_KM));
+        v[8] = q(Config.clamp((double) req.customer.tx_count_24h / Config.MAX_TX_COUNT_24H));
+        v[9] = (short) (req.terminal.is_online ? SCALE : 0);
+        v[10] = (short) (req.terminal.card_present ? SCALE : 0);
 
         boolean knownMerchant = req.customer.known_merchants != null
                 && req.customer.known_merchants.contains(req.merchant.id);
-        v[11] = knownMerchant ? 0.0 : 1.0;
+        v[11] = (short) (knownMerchant ? 0 : SCALE);
 
-        v[12] = config.getMccRisk(req.merchant.mcc);
-        v[13] = Config.clamp(req.merchant.avg_amount / Config.MAX_MERCHANT_AVG_AMOUNT);
+        v[12] = q(config.getMccRisk(req.merchant.mcc));
+        v[13] = q(Config.clamp(req.merchant.avg_amount / Config.MAX_MERCHANT_AVG_AMOUNT));
 
         return v;
+    }
+
+    private static short q(double val) {
+        return (short) Math.round(val * SCALE);
     }
 
     private static int d(String s, int i) {

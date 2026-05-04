@@ -8,9 +8,11 @@ import java.io.DataOutputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Type;
-import java.util.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.stream.IntStream;
 import java.util.zip.GZIPInputStream;
 
 public final class DataPreprocessor {
@@ -29,57 +31,80 @@ public final class DataPreprocessor {
         String outputPath = args[1];
 
         System.out.println("Loading references from: " + inputPath);
-        List<ReferenceEntry> entries = loadReferences(inputPath);
-        int numVectors = entries.size();
-        System.out.println("Loaded " + numVectors + " vectors");
+        List<RefEntry> entries = loadReferences(inputPath);
+        int n = entries.size();
+        System.out.println("Loaded " + n + " vectors");
 
-        double[][] vectors = new double[numVectors][DIMS];
-        byte[] labels = new byte[numVectors];
-        for (int i = 0; i < numVectors; i++) {
-            ReferenceEntry e = entries.get(i);
+        float[][] vectors = new float[n][DIMS];
+        byte[] labels = new byte[n];
+        int[] origIds = new int[n];
+        for (int i = 0; i < n; i++) {
+            RefEntry e = entries.get(i);
             for (int d = 0; d < DIMS; d++) {
-                vectors[i][d] = e.vector[d];
+                vectors[i][d] = (float) e.vector[d];
             }
             labels[i] = (byte) ("fraud".equals(e.label) ? 1 : 0);
+            origIds[i] = i;
         }
         entries = null;
 
         System.out.println("Running K-means with " + NUM_CLUSTERS + " clusters...");
-        double[][] centroids = kmeans(vectors, NUM_CLUSTERS, KMEANS_ITERS);
+        float[][] centroids = kmeans(vectors, NUM_CLUSTERS, KMEANS_ITERS);
         System.out.println("K-means done");
 
-        int[] assignments = new int[numVectors];
-        for (int i = 0; i < numVectors; i++) {
+        int[] assignments = new int[n];
+        for (int i = 0; i < n; i++) {
             assignments[i] = nearestCentroid(vectors[i], centroids);
         }
 
-        int[] order = new int[numVectors];
-        for (int i = 0; i < numVectors; i++) order[i] = i;
+        int[] order = new int[n];
+        for (int i = 0; i < n; i++) order[i] = i;
         int[] finalAssignments = assignments;
         ArrayMergeSort.sort(order, finalAssignments);
 
         int[] clusterOffsets = new int[NUM_CLUSTERS + 1];
-        for (int i = 0; i < numVectors; i++) {
+        for (int i = 0; i < n; i++) {
             clusterOffsets[assignments[order[i]] + 1]++;
         }
         for (int c = 0; c < NUM_CLUSTERS; c++) {
             clusterOffsets[c + 1] += clusterOffsets[c];
         }
 
-        byte[] sortedVectors = new byte[numVectors * DIMS];
-        byte[] sortedLabels = new byte[numVectors];
-        for (int i = 0; i < numVectors; i++) {
+        short[] sortedVectors = new short[n * DIMS];
+        byte[] sortedLabels = new byte[n];
+        int[] sortedOrigIds = new int[n];
+        for (int i = 0; i < n; i++) {
             int srcIdx = order[i];
             for (int d = 0; d < DIMS; d++) {
-                int quantized = (int) Math.round(vectors[srcIdx][d] * 100);
-                sortedVectors[i * DIMS + d] = (byte) Math.max(-128, Math.min(127, quantized));
+                sortedVectors[i * DIMS + d] = (short) Math.round(vectors[srcIdx][d] * Config.FIX_SCALE);
             }
             sortedLabels[i] = labels[srcIdx];
+            sortedOrigIds[i] = origIds[srcIdx];
+        }
+
+        short[] bboxMin = new short[NUM_CLUSTERS * DIMS];
+        short[] bboxMax = new short[NUM_CLUSTERS * DIMS];
+        for (int c = 0; c < NUM_CLUSTERS; c++) {
+            int cOff = c * DIMS;
+            for (int d = 0; d < DIMS; d++) {
+                bboxMin[cOff + d] = Short.MAX_VALUE;
+                bboxMax[cOff + d] = Short.MIN_VALUE;
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            int c = assignments[order[i]];
+            int cOff = c * DIMS;
+            int vOff = i * DIMS;
+            for (int d = 0; d < DIMS; d++) {
+                short val = sortedVectors[vOff + d];
+                if (val < bboxMin[cOff + d]) bboxMin[cOff + d] = val;
+                if (val > bboxMax[cOff + d]) bboxMax[cOff + d] = val;
+            }
         }
 
         System.out.println("Writing index to: " + outputPath);
         try (var dos = new DataOutputStream(new FileOutputStream(outputPath))) {
-            dos.writeInt(numVectors);
+            dos.writeInt(n);
             dos.writeInt(NUM_CLUSTERS);
             dos.writeInt(DIMS);
 
@@ -89,49 +114,56 @@ public final class DataPreprocessor {
 
             for (int c = 0; c < NUM_CLUSTERS; c++) {
                 for (int d = 0; d < DIMS; d++) {
-                    dos.writeFloat((float) centroids[c][d]);
+                    dos.writeFloat(centroids[c][d]);
                 }
             }
 
-            dos.write(sortedVectors);
+            byte[] shortBuf = new byte[n * DIMS * 2];
+            ByteBuffer.wrap(shortBuf).order(ByteOrder.BIG_ENDIAN).asShortBuffer().put(sortedVectors);
+            dos.write(shortBuf);
 
             dos.write(sortedLabels);
+
+            byte[] intBuf = new byte[n * 4];
+            ByteBuffer.wrap(intBuf).order(ByteOrder.BIG_ENDIAN).asIntBuffer().put(sortedOrigIds);
+            dos.write(intBuf);
+
+            byte[] bboxMinBuf = new byte[NUM_CLUSTERS * DIMS * 2];
+            ByteBuffer.wrap(bboxMinBuf).order(ByteOrder.BIG_ENDIAN).asShortBuffer().put(bboxMin);
+            dos.write(bboxMinBuf);
+
+            byte[] bboxMaxBuf = new byte[NUM_CLUSTERS * DIMS * 2];
+            ByteBuffer.wrap(bboxMaxBuf).order(ByteOrder.BIG_ENDIAN).asShortBuffer().put(bboxMax);
+            dos.write(bboxMaxBuf);
         }
 
         System.out.println("Index written successfully");
-        System.out.println("  Vectors: " + numVectors);
+        System.out.println("  Vectors: " + n);
         System.out.println("  Clusters: " + NUM_CLUSTERS);
         System.out.println("  Dimensions: " + DIMS);
-        System.out.println("  Vector data: " + (numVectors * DIMS / 1024 / 1024) + " MB");
-        System.out.println("  Labels: " + (numVectors / 1024 / 1024) + " MB");
     }
 
-    private static List<ReferenceEntry> loadReferences(String path) throws Exception {
+    private static List<RefEntry> loadReferences(String path) throws Exception {
         try (var reader = new InputStreamReader(
                 new GZIPInputStream(new java.io.FileInputStream(path)))) {
-            Type type = new TypeToken<List<ReferenceEntry>>() {}.getType();
+            Type type = new TypeToken<List<RefEntry>>() {}.getType();
             return new Gson().fromJson(reader, type);
         }
     }
 
-    private static double[][] kmeans(double[][] data, int k, int maxIter) {
+    private static float[][] kmeans(float[][] data, int k, int maxIter) {
         int n = data.length;
-        double[][] centroids = initCentroidsKMeansPlusPlus(data, k);
+        float[][] centroids = initCentroidsKMeansPlusPlus(data, k);
         int[] assignments = new int[n];
 
         for (int iter = 0; iter < maxIter; iter++) {
             long iterStart = System.currentTimeMillis();
 
-            int[] newAssignments = IntStream.range(0, n).parallel().map(i ->
-                nearestCentroid(data[i], centroids)).toArray();
-
-            int changed = 0;
             for (int i = 0; i < n; i++) {
-                if (newAssignments[i] != assignments[i]) changed++;
-                assignments[i] = newAssignments[i];
+                assignments[i] = nearestCentroid(data[i], centroids);
             }
 
-            double[][] sums = new double[k][DIMS];
+            float[][] sums = new float[k][DIMS];
             int[] counts = new int[k];
 
             for (int i = 0; i < n; i++) {
@@ -142,10 +174,13 @@ public final class DataPreprocessor {
                 }
             }
 
+            int changed = 0;
             for (int c = 0; c < k; c++) {
                 if (counts[c] > 0) {
                     for (int d = 0; d < DIMS; d++) {
-                        centroids[c][d] = sums[c][d] / counts[c];
+                        float newVal = sums[c][d] / counts[c];
+                        if (Float.floatToIntBits(newVal) != Float.floatToIntBits(centroids[c][d])) changed++;
+                        centroids[c][d] = newVal;
                     }
                 }
             }
@@ -163,20 +198,20 @@ public final class DataPreprocessor {
         return centroids;
     }
 
-    private static double[][] initCentroidsKMeansPlusPlus(double[][] data, int k) {
+    private static float[][] initCentroidsKMeansPlusPlus(float[][] data, int k) {
         int n = data.length;
-        double[][] centroids = new double[k][DIMS];
+        float[][] centroids = new float[k][DIMS];
         ThreadLocalRandom rng = ThreadLocalRandom.current();
 
         int firstIdx = rng.nextInt(n);
-        centroids[0] = data[firstIdx].clone();
+        System.arraycopy(data[firstIdx], 0, centroids[0], 0, DIMS);
 
         double[] minDists = new double[n];
         Arrays.fill(minDists, Double.MAX_VALUE);
 
         for (int c = 1; c < k; c++) {
             double totalDist = 0.0;
-            double[] prev = centroids[c - 1];
+            float[] prev = centroids[c - 1];
 
             for (int i = 0; i < n; i++) {
                 double dist = 0.0;
@@ -201,9 +236,9 @@ public final class DataPreprocessor {
                 }
             }
 
-            centroids[c] = data[chosen].clone();
+            System.arraycopy(data[chosen], 0, centroids[c], 0, DIMS);
 
-            if (c % 500 == 0) {
+            if (c % 50 == 0) {
                 System.out.println("  K-means++ init: " + c + "/" + k);
             }
         }
@@ -211,7 +246,7 @@ public final class DataPreprocessor {
         return centroids;
     }
 
-    private static int nearestCentroid(double[] vector, double[][] centroids) {
+    private static int nearestCentroid(float[] vector, float[][] centroids) {
         int best = 0;
         double bestDist = Double.MAX_VALUE;
         for (int c = 0; c < centroids.length; c++) {
@@ -228,7 +263,7 @@ public final class DataPreprocessor {
         return best;
     }
 
-    private static final class ReferenceEntry {
+    private static final class RefEntry {
         double[] vector;
         String label;
     }

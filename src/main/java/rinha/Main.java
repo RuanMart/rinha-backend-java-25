@@ -6,12 +6,10 @@ import rinha.model.JsonParser;
 import rinha.search.IVFIndex;
 import rinha.vector.Vectorizer;
 
-import java.io.BufferedOutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.Semaphore;
 
 public final class Main {
 
@@ -21,9 +19,9 @@ public final class Main {
     private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NOT_ALLOWED = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] BAD_REQUEST = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
 
     private static final byte[][] SCORED = buildScoredResponses();
-    private static final Semaphore GATE = new Semaphore(Runtime.getRuntime().availableProcessors() * 4);
 
     private static Config config;
     private static Vectorizer vectorizer;
@@ -60,12 +58,12 @@ public final class Main {
 
     private static byte[][] buildScoredResponses() {
         String[] jsons = {
-            "{\"approved\":true,\"fraud_score\":0.0}",
-            "{\"approved\":true,\"fraud_score\":0.2}",
-            "{\"approved\":true,\"fraud_score\":0.4}",
-            "{\"approved\":false,\"fraud_score\":0.6}",
-            "{\"approved\":false,\"fraud_score\":0.8}",
-            "{\"approved\":false,\"fraud_score\":1.0}"
+            "{\"approved\":true,\"fraud_score\":0.0000}",
+            "{\"approved\":true,\"fraud_score\":0.2000}",
+            "{\"approved\":true,\"fraud_score\":0.4000}",
+            "{\"approved\":false,\"fraud_score\":0.6000}",
+            "{\"approved\":false,\"fraud_score\":0.8000}",
+            "{\"approved\":false,\"fraud_score\":1.0000}"
         };
         byte[][] res = new byte[6][];
         for (int i = 0; i < 6; i++) {
@@ -81,7 +79,7 @@ public final class Main {
             var in = socket.getInputStream();
             var out = socket.getOutputStream();
 
-            byte[] buf = new byte[4096];
+            byte[] buf = new byte[16384];
             int pos = 0;
 
             for (;;) {
@@ -148,24 +146,12 @@ public final class Main {
     }
 
     private static void processFraud(byte[] buf, int off, int len, java.io.OutputStream out) throws Exception {
-        if (!GATE.tryAcquire()) {
-            out.write(SCORED[0]);
-            return;
-        }
         try {
-            byte[] resp;
-            try {
-                FraudRequest req = JsonParser.parse(new String(buf, off, len, StandardCharsets.UTF_8));
-                int fraudCount = index.search(vectorizer.vectorize(req));
-                resp = SCORED[fraudCount];
-            } catch (Exception e) {
-                resp = SCORED[0];
-            }
-            out.write(resp);
+            FraudRequest req = JsonParser.parse(new String(buf, off, len, StandardCharsets.UTF_8));
+            int fraudCount = index.search(vectorizer.vectorize(req));
+            out.write(SCORED[fraudCount]);
         } catch (Exception e) {
-            out.write(SCORED[0]);
-        } finally {
-            GATE.release();
+            out.write(BAD_REQUEST);
         }
     }
 
