@@ -8,20 +8,22 @@ import rinha.model.FraudResponse;
 import rinha.search.IVFIndex;
 import rinha.vector.Vectorizer;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.Executors;
 
 public final class Main {
 
     private static final Gson GSON = new GsonBuilder().create();
-    private static final byte[] FALLBACK_BYTES = "{\"approved\":true,\"fraud_score\":0.0}".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] FALLBACK_JSON = "{\"approved\":true,\"fraud_score\":0.0}".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] HTTP_OK_HDR = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] SEP = {'\r', '\n', '\r', '\n'};
+    private static final byte[] READY_OK = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NOT_ALLOWED = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+
     private static Config config;
     private static Vectorizer vectorizer;
     private static IVFIndex index;
@@ -46,81 +48,140 @@ public final class Main {
         long elapsed = System.currentTimeMillis() - start;
         System.out.println("IVF index loaded in " + elapsed + "ms");
 
-        HttpServer server = HttpServer.create(new InetSocketAddress(Config.PORT), 4096);
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
-
-        server.createContext("/ready", Main::handleReady);
-        server.createContext("/fraud-score", Main::handleFraudScore);
-
-        server.start();
-        System.out.println("Server listening on port " + Config.PORT);
-    }
-
-    private static void handleReady(HttpExchange exchange) throws IOException {
-        try {
-            if (index.isReady()) {
-                sendResponse(exchange, 200, "OK");
-            } else {
-                sendResponse(exchange, 503, "Not Ready");
+        try (var ss = new ServerSocket(Config.PORT, 8192)) {
+            System.out.println("Server listening on port " + Config.PORT);
+            while (true) {
+                Socket s = ss.accept();
+                Thread.startVirtualThread(() -> handleConnection(s));
             }
-        } finally {
-            exchange.close();
         }
     }
 
-    private static void handleFraudScore(HttpExchange exchange) throws IOException {
-        try {
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                sendResponse(exchange, 405, "Method Not Allowed");
-                return;
+    private static void handleConnection(Socket socket) {
+        try (socket) {
+            socket.setTcpNoDelay(true);
+            socket.setSoTimeout(5000);
+            var in = socket.getInputStream();
+            var out = socket.getOutputStream();
+
+            byte[] buf = new byte[16384];
+            int pos = 0;
+
+            for (;;) {
+                int hdrEnd = find(buf, 0, pos, SEP);
+                while (hdrEnd < 0) {
+                    if (pos >= buf.length) return;
+                    int n = in.read(buf, pos, buf.length - pos);
+                    if (n < 0) return;
+                    int from = Math.max(0, pos - 3);
+                    pos += n;
+                    hdrEnd = find(buf, from, pos, SEP);
+                }
+
+                int bodyStart = hdrEnd + 4;
+                int clen = contentLength(buf, hdrEnd);
+
+                while (pos < bodyStart + clen) {
+                    if (pos >= buf.length) return;
+                    int n = in.read(buf, pos, buf.length - pos);
+                    if (n < 0) return;
+                    pos += n;
+                }
+
+                int sp1 = -1, sp2 = -1;
+                for (int i = 0; i < hdrEnd; i++) {
+                    if (buf[i] == ' ') {
+                        if (sp1 < 0) sp1 = i;
+                        else { sp2 = i; break; }
+                    }
+                }
+                if (sp1 < 0 || sp2 < 0) return;
+
+                int pathLen = sp2 - sp1 - 1;
+
+                if (pathLen == 12 && buf[sp1 + 2] == 'f') {
+                    if (sp1 == 4 && buf[0] == 'P') {
+                        processFraud(buf, bodyStart, clen, out);
+                    } else {
+                        out.write(NOT_ALLOWED);
+                        return;
+                    }
+                } else if (pathLen == 6 && buf[sp1 + 2] == 'r') {
+                    if (index.isReady()) {
+                        out.write(READY_OK);
+                    } else {
+                        out.write(READY_FAIL);
+                        return;
+                    }
+                } else {
+                    out.write(NOT_FOUND);
+                    return;
+                }
+
+                out.flush();
+
+                int consumed = bodyStart + clen;
+                int rem = pos - consumed;
+                if (rem > 0) System.arraycopy(buf, consumed, buf, 0, rem);
+                pos = rem;
             }
-
-            FraudRequest request;
-            try (var reader = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)) {
-                request = GSON.fromJson(reader, FraudRequest.class);
-            }
-
-            if (request == null || request.transaction == null
-                    || request.customer == null || request.merchant == null || request.terminal == null) {
-                sendFallback(exchange);
-                return;
-            }
-
-            double[] vector = vectorizer.vectorize(request);
-            IVFIndex.SearchResult result = index.search(vector, Config.IVF_NPROBE, Config.KNN_K);
-
-            FraudResponse response = new FraudResponse(result.approved(), result.fraudScore());
-            String json = GSON.toJson(response);
-
-            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(bytes);
-            }
-        } catch (Exception e) {
-            sendFallback(exchange);
-        } finally {
-            exchange.close();
-        }
-    }
-
-    private static void sendFallback(HttpExchange exchange) {
-        try {
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, FALLBACK_BYTES.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(FALLBACK_BYTES);
-            }
+        } catch (SocketTimeoutException ignored) {
         } catch (Exception ignored) {
         }
     }
 
-    private static void sendResponse(HttpExchange exchange, int code, String body) throws IOException {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(code, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
+    private static void processFraud(byte[] buf, int off, int len, java.io.OutputStream out) throws Exception {
+        byte[] jsonBytes;
+        try {
+            FraudRequest req = GSON.fromJson(new String(buf, off, len, StandardCharsets.UTF_8), FraudRequest.class);
+            double score = index.searchCentroidScore(vectorizer.vectorize(req));
+            jsonBytes = GSON.toJson(new FraudResponse(score < Config.FRAUD_THRESHOLD, score)).getBytes(StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            jsonBytes = FALLBACK_JSON;
         }
+        out.write(HTTP_OK_HDR);
+        out.write(Integer.toString(jsonBytes.length).getBytes(StandardCharsets.UTF_8));
+        out.write(SEP);
+        out.write(jsonBytes);
+    }
+
+    private static int find(byte[] buf, int from, int limit, byte[] pat) {
+        outer:
+        for (int i = from; i <= limit - pat.length; i++) {
+            for (int j = 0; j < pat.length; j++) {
+                if (buf[i + j] != pat[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private static int contentLength(byte[] buf, int hdrEnd) {
+        int i = 0;
+        while (i < hdrEnd - 1) {
+            if (buf[i] == '\r' && buf[i + 1] == '\n') { i += 2; break; }
+            i++;
+        }
+        while (i <= hdrEnd - 16) {
+            if (iMatch(buf, i, "content-length:")) {
+                i += 16;
+                while (i < hdrEnd && buf[i] == ' ') i++;
+                int v = 0;
+                while (i < hdrEnd && buf[i] >= '0' && buf[i] <= '9') v = v * 10 + (buf[i++] - '0');
+                return v;
+            }
+            while (i < hdrEnd - 1) {
+                if (buf[i] == '\r' && buf[i + 1] == '\n') { i += 2; break; }
+                i++;
+            }
+        }
+        return 0;
+    }
+
+    private static boolean iMatch(byte[] b, int o, String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if ((b[o + i] | 0x20) != (s.charAt(i) | 0x20)) return false;
+        }
+        return true;
     }
 }

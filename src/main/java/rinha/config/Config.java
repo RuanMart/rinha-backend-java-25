@@ -14,8 +14,8 @@ public final class Config {
     public static final int PORT = 8080;
     public static final int KNN_K = 5;
     public static final double FRAUD_THRESHOLD = 0.6;
-    public static final int IVF_NPROBE = 8;
-    public static final int IVF_NUM_CLUSTERS = 200;
+    public static final int IVF_NPROBE = 1;
+    public static final int IVF_NUM_CLUSTERS = 500;
     public static final int IVF_KMEANS_ITERATIONS = 10;
     public static final int DIMENSIONS = 14;
 
