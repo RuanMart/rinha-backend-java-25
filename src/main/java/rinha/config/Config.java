@@ -16,8 +16,8 @@ public final class Config {
     public static final int IVF_NUM_CLUSTERS = 512;
     public static final int IVF_KMEANS_ITERATIONS = 30;
     public static final int FIX_SCALE = 10000;
-    public static final int IVF_NPROBE = 8;
-    public static final int IVF_RETRY_EXTRA = 16;
+    public static final int IVF_NPROBE = 2;
+    public static final int IVF_RETRY_EXTRA = 0;
     public static final int IVF_MAX_NPROBE = 2048;
 
     public static final double MAX_AMOUNT = 10000.0;
