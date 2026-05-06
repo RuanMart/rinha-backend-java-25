@@ -19,7 +19,7 @@ CMD ["java", \
      "--add-opens", "java.base/sun.misc=ALL-UNNAMED", \
      "--sun-misc-unsafe-memory-access=allow", \
      "-XX:+UseSerialGC", \
-     "-Xms64m", "-Xmx64m", \
+     "-Xms80m", "-Xmx80m", \
      "-XX:+TieredCompilation", \
      "-XX:CompileThreshold=500", \
      "-XX:Tier4CompileThreshold=250", \
