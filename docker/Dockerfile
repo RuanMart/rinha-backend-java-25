@@ -19,7 +19,7 @@ CMD java \
     --add-opens java.base/sun.misc=ALL-UNNAMED \
     --sun-misc-unsafe-memory-access=allow \
     -XX:+UseSerialGC \
-    -Xms128m -Xmx128m \
+    -Xms96m -Xmx96m \
     -XX:+AlwaysPreTouch \
     -XX:+TieredCompilation \
     -XX:CompileThreshold=500 \
@@ -28,8 +28,8 @@ CMD java \
     -XX:+DoEscapeAnalysis \
     -XX:+EliminateAllocations \
     -XX:+DisableExplicitGC \
-    -XX:MetaspaceSize=24m \
-    -XX:MaxMetaspaceSize=48m \
+    -XX:MetaspaceSize=16m \
+    -XX:MaxMetaspaceSize=32m \
     -Xss256k \
     -XX:+UseCompressedOops \
     -XX:+UseCompressedClassPointers \
