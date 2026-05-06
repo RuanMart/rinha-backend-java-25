@@ -37,10 +37,8 @@ public final class Main {
 
         System.out.println("Loading IVF index...");
         long start = System.currentTimeMillis();
-        try (var is = Main.class.getClassLoader().getResourceAsStream("index.bin")) {
-            if (is == null) {
-                throw new RuntimeException("index.bin not found in classpath. Run DataPreprocessor first.");
-            }
+        String indexPath = System.getenv().getOrDefault("INDEX_PATH", "index.bin");
+        try (var is = new java.io.FileInputStream(indexPath)) {
             index = IVFIndex.load(is);
         }
         index.markReady();

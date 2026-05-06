@@ -191,19 +191,10 @@ public final class IVFIndex {
             centroids[i] = dis.readFloat() * Config.FIX_SCALE;
         }
 
-        short[] bboxMin = null;
-        short[] bboxMax = null;
-        if (dis.available() > 0) {
-            try {
-                bboxMin = new short[numClusters * dims];
-                readShorts(dis, bboxMin);
-                bboxMax = new short[numClusters * dims];
-                readShorts(dis, bboxMax);
-            } catch (Exception e) {
-                bboxMin = null;
-                bboxMax = null;
-            }
-        }
+        short[] bboxMin = new short[numClusters * dims];
+        readShorts(dis, bboxMin);
+        short[] bboxMax = new short[numClusters * dims];
+        readShorts(dis, bboxMax);
 
         short[] vectors = new short[numVectors * dims];
         readShorts(dis, vectors);

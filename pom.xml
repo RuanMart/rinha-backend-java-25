@@ -117,6 +117,7 @@
                         <buildArg>-O2</buildArg>
                         <buildArg>--initialize-at-build-time=gson</buildArg>
                         <buildArg>-R:MaxHeapSize=150m</buildArg>
+                        <buildArg>-H:ExcludeResources=index.bin</buildArg>
 
                     </buildArgs>
                 </configuration>

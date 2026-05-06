@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 && r
 
 WORKDIR /app
 COPY --from=builder /build/target/rinha-2026-api ./app
+COPY --from=builder /build/src/main/resources/index.bin ./index.bin
 
 EXPOSE 8080
 
