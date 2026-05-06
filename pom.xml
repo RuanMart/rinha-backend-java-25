@@ -14,15 +14,18 @@
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <gson.version>2.12.1</gson.version>
-        <graalvm.plugin.version>0.10.6</graalvm.plugin.version>
     </properties>
 
     <dependencies>
         <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.2.5.Final</version>
+        </dependency>
+        <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
-            <version>${gson.version}</version>
+            <version>2.12.1</version>
         </dependency>
     </dependencies>
 
@@ -36,7 +39,8 @@
                     <source>${java.version}</source>
                     <target>${java.version}</target>
                     <compilerArgs>
-                        <arg>--enable-preview</arg>
+                        <arg>--add-modules</arg>
+                        <arg>jdk.incubator.vector</arg>
                     </compilerArgs>
                 </configuration>
             </plugin>
@@ -52,6 +56,17 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>rinha.Main</mainClass>
@@ -92,42 +107,7 @@
                                 <argument>${project.basedir}/data/references.json.gz</argument>
                                 <argument>${project.basedir}/src/main/resources/index.bin</argument>
                             </arguments>
-                            <systemProperties>
-                                <systemProperty>
-                                    <key>java.util.concurrent.ForkJoinPool.common.parallelism</key>
-                                    <value>4</value>
-                                </systemProperty>
-                            </systemProperties>
                         </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>org.graalvm.buildtools</groupId>
-                <artifactId>native-maven-plugin</artifactId>
-                <version>${graalvm.plugin.version}</version>
-                <extensions>true</extensions>
-                <configuration>
-                    <imageName>rinha-2026-api</imageName>
-                    <mainClass>rinha.Main</mainClass>
-                    <buildArgs>
-                        <buildArg>--enable-preview</buildArg>
-                        <buildArg>-H:+ReportExceptionStackTraces</buildArg>
-                        <buildArg>-O2</buildArg>
-                        <buildArg>--initialize-at-build-time=gson</buildArg>
-                        <buildArg>-R:MaxHeapSize=150m</buildArg>
-                        <buildArg>-H:ExcludeResources=index.bin</buildArg>
-
-                    </buildArgs>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>build-native</id>
-                        <goals>
-                            <goal>compile-no-fork</goal>
-                        </goals>
-                        <phase>package</phase>
                     </execution>
                 </executions>
             </plugin>

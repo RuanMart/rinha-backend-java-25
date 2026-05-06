@@ -1,217 +1,250 @@
 package rinha;
 
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.*;
+import io.netty.channel.epoll.Epoll;
+import io.netty.channel.epoll.EpollIoHandler;
+import io.netty.channel.epoll.EpollServerSocketChannel;
+import io.netty.channel.nio.NioIoHandler;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.*;
+import io.netty.util.CharsetUtil;
 import rinha.config.Config;
-import rinha.model.FraudRequest;
-import rinha.model.JsonParser;
 import rinha.search.IVFIndex;
 import rinha.vector.Vectorizer;
 
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 public final class Main {
 
-    private static final byte[] HTTP_OK_HDR = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] CRLFCRLF = {'\r', '\n', '\r', '\n'};
-    private static final byte[] READY_OK = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] READY_FAIL = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] NOT_FOUND = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] NOT_ALLOWED = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] BAD_REQUEST = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final int PORT = Integer.parseInt(
+            System.getenv().getOrDefault("SERVER_PORT", "8080"));
 
-    private static final byte[][] SCORED = buildScoredResponses();
+    private static final ByteBuf[] HTTP_OK = buildOkResponses();
 
-    private static Config config;
-    private static Vectorizer vectorizer;
-    private static IVFIndex index;
+    private static ByteBuf[] buildOkResponses() {
+        String[] bodies = {
+                "{\"approved\":true,\"fraud_score\":0.0}",
+                "{\"approved\":true,\"fraud_score\":0.2}",
+                "{\"approved\":true,\"fraud_score\":0.4}",
+                "{\"approved\":false,\"fraud_score\":0.6}",
+                "{\"approved\":false,\"fraud_score\":0.8}",
+                "{\"approved\":false,\"fraud_score\":1.0}",
+        };
+        ByteBuf[] r = new ByteBuf[bodies.length];
+        for (int i = 0; i < bodies.length; i++) {
+            r[i] = encodeResponse(200, "OK", "application/json", bodies[i]);
+        }
+        return r;
+    }
+
+    private static final ByteBuf HTTP_BAD_REQUEST = encodeResponse(400, "Bad Request", "text/plain", "Bad Request");
+    private static final ByteBuf HTTP_NOT_FOUND = encodeResponse(404, "Not Found", "text/plain", "Not Found");
+    private static final ByteBuf HTTP_METHOD_NOT_ALLOWED = encodeResponse(405, "Method Not Allowed", "text/plain", "Method Not Allowed");
+    private static final ByteBuf HTTP_SERVICE_UNAVAILABLE = encodeResponse(503, "Service Unavailable", "text/plain", "Starting");
+    private static final ByteBuf HTTP_READY_OK = encodeResponse(200, "OK", "text/plain", "OK");
+
+    private static ByteBuf encodeResponse(int status, String statusText,
+                                          String contentType, String body) {
+        String raw = "HTTP/1.1 " + status + " " + statusText + "\r\n"
+                + "Content-Type: " + contentType + "\r\n"
+                + "Content-Length: " + body.length() + "\r\n"
+                + "Connection: keep-alive\r\n\r\n"
+                + body;
+        byte[] bytes = raw.getBytes(CharsetUtil.US_ASCII);
+        return Unpooled.unreleasableBuffer(
+                Unpooled.directBuffer(bytes.length).writeBytes(bytes));
+    }
+
+    static IVFIndex STORE;
+    static volatile boolean READY = false;
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Initializing...");
+        Files.deleteIfExists(Paths.get("/tmp/ready"));
 
-        config = new Config();
-        System.out.println("Config loaded (MCC risk entries: " + config.mccRisk.size() + ")");
+        boolean useEpoll = Epoll.isAvailable();
+        IoHandlerFactory ioFactory = useEpoll
+                ? EpollIoHandler.newFactory()
+                : NioIoHandler.newFactory();
+        Class<? extends ServerChannel> channelClass = useEpoll
+                ? EpollServerSocketChannel.class
+                : NioServerSocketChannel.class;
+        System.out.println("Transport: " + (useEpoll ? "epoll" : "nio"));
 
-        vectorizer = new Vectorizer(config);
+        MultiThreadIoEventLoopGroup boss = new MultiThreadIoEventLoopGroup(1, ioFactory);
+        MultiThreadIoEventLoopGroup worker = new MultiThreadIoEventLoopGroup(2, ioFactory);
 
-        System.out.println("Loading IVF index...");
-        long start = System.currentTimeMillis();
-        String indexPath = System.getenv().getOrDefault("INDEX_PATH", "index.bin");
-        try (var is = new java.io.FileInputStream(indexPath)) {
-            index = IVFIndex.load(is);
-        }
-        index.markReady();
-        long elapsed = System.currentTimeMillis() - start;
-        System.out.println("IVF index loaded in " + elapsed + "ms");
-
-        try (var ss = new ServerSocket(Config.PORT, 8192)) {
-            System.out.println("Server listening on port " + Config.PORT);
-            while (true) {
-                Socket s = ss.accept();
-                Thread.startVirtualThread(() -> handleConnection(s));
-            }
-        }
-    }
-
-    private static byte[][] buildScoredResponses() {
-        String[] jsons = {
-            "{\"approved\":true,\"fraud_score\":0.0000}",
-            "{\"approved\":true,\"fraud_score\":0.2000}",
-            "{\"approved\":true,\"fraud_score\":0.4000}",
-            "{\"approved\":false,\"fraud_score\":0.6000}",
-            "{\"approved\":false,\"fraud_score\":0.8000}",
-            "{\"approved\":false,\"fraud_score\":1.0000}"
-        };
-        byte[][] res = new byte[6][];
-        for (int i = 0; i < 6; i++) {
-            res[i] = buildResponse(jsons[i].getBytes(StandardCharsets.UTF_8));
-        }
-        return res;
-    }
-
-    private static void handleConnection(Socket socket) {
-        try (socket) {
-            socket.setTcpNoDelay(true);
-            socket.setSoTimeout(5000);
-            var in = socket.getInputStream();
-            var out = socket.getOutputStream();
-
-            byte[] buf = new byte[16384];
-            int pos = 0;
-
-            for (;;) {
-                int hdrEnd = find(buf, 0, pos, CRLFCRLF);
-                while (hdrEnd < 0) {
-                    if (pos >= buf.length) return;
-                    int n = in.read(buf, pos, buf.length - pos);
-                    if (n < 0) return;
-                    int from = Math.max(0, pos - 3);
-                    pos += n;
-                    hdrEnd = find(buf, from, pos, CRLFCRLF);
-                }
-
-                int bodyStart = hdrEnd + 4;
-                int clen = contentLength(buf, hdrEnd);
-
-                while (pos < bodyStart + clen) {
-                    if (pos >= buf.length) return;
-                    int n = in.read(buf, pos, buf.length - pos);
-                    if (n < 0) return;
-                    pos += n;
-                }
-
-                int sp1 = -1, sp2 = -1;
-                for (int i = 0; i < hdrEnd; i++) {
-                    if (buf[i] == ' ') {
-                        if (sp1 < 0) sp1 = i;
-                        else { sp2 = i; break; }
+        Channel channel = new ServerBootstrap()
+                .group(boss, worker)
+                .channel(channelClass)
+                .option(ChannelOption.SO_BACKLOG, 2048)
+                .option(ChannelOption.SO_REUSEADDR, true)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, false)
+                .childOption(ChannelOption.SO_RCVBUF, 32768)
+                .childOption(ChannelOption.SO_SNDBUF, 32768)
+                .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline()
+                                .addLast(new HttpServerCodec(4096, 8192, 8192))
+                                .addLast(new HttpObjectAggregator(8192))
+                                .addLast(RequestHandler.INSTANCE);
                     }
-                }
-                if (sp1 < 0 || sp2 < 0) return;
+                })
+                .bind(PORT)
+                .sync()
+                .channel();
 
-                int pathLen = sp2 - sp1 - 1;
-
-                if (pathLen == 12 && buf[sp1 + 2] == 'f') {
-                    if (sp1 == 4 && buf[0] == 'P') {
-                        processFraud(buf, bodyStart, clen, out);
-                    } else {
-                        out.write(NOT_ALLOWED);
-                        return;
-                    }
-                } else if (pathLen == 6 && buf[sp1 + 2] == 'r') {
-                    if (index.isReady()) {
-                        out.write(READY_OK);
-                    } else {
-                        out.write(READY_FAIL);
-                        return;
-                    }
-                } else {
-                    out.write(NOT_FOUND);
-                    return;
-                }
-
-                out.flush();
-
-                int consumed = bodyStart + clen;
-                int rem = pos - consumed;
-                if (rem > 0) System.arraycopy(buf, consumed, buf, 0, rem);
-                pos = rem;
-            }
-        } catch (SocketTimeoutException ignored) {
-        } catch (Exception ignored) {
-        }
-    }
-
-    private static void processFraud(byte[] buf, int off, int len, java.io.OutputStream out) throws Exception {
         try {
-            FraudRequest req = JsonParser.parse(new String(buf, off, len, StandardCharsets.UTF_8));
-            int fraudCount = index.search(vectorizer.vectorize(req));
-            out.write(SCORED[fraudCount]);
-        } catch (Exception e) {
-            out.write(BAD_REQUEST);
-        }
-    }
+            String binPath = System.getenv().getOrDefault("INDEX_PATH", "/app/index.bin");
+            long t = System.currentTimeMillis();
+            System.out.println("Loading index from: " + binPath);
+            STORE = IVFIndex.load(binPath);
 
-    private static byte[] buildResponse(byte[] jsonBytes) {
-        int jsonLen = jsonBytes.length;
-        int digits = jsonLen < 10 ? 1 : jsonLen < 100 ? 2 : 3;
-        int total = HTTP_OK_HDR.length + digits + 4 + jsonLen;
-        byte[] resp = new byte[total];
-        int p = 0;
-        System.arraycopy(HTTP_OK_HDR, 0, resp, p, HTTP_OK_HDR.length); p += HTTP_OK_HDR.length;
-        if (digits == 1) {
-            resp[p++] = (byte) ('0' + jsonLen);
-        } else if (digits == 2) {
-            resp[p++] = (byte) ('0' + jsonLen / 10);
-            resp[p++] = (byte) ('0' + jsonLen % 10);
-        } else {
-            resp[p++] = (byte) ('0' + jsonLen / 100);
-            resp[p++] = (byte) ('0' + (jsonLen / 10) % 10);
-            resp[p++] = (byte) ('0' + jsonLen % 10);
-        }
-        resp[p++] = '\r'; resp[p++] = '\n'; resp[p++] = '\r'; resp[p++] = '\n';
-        System.arraycopy(jsonBytes, 0, resp, p, jsonLen);
-        return resp;
-    }
-
-    private static int find(byte[] buf, int from, int limit, byte[] pat) {
-        outer:
-        for (int i = from; i <= limit - pat.length; i++) {
-            for (int j = 0; j < pat.length; j++) {
-                if (buf[i + j] != pat[j]) continue outer;
+            String nprobeEnv = System.getenv("NPROBE");
+            if (nprobeEnv != null && !nprobeEnv.isEmpty()) {
+                int overrideNprobe = Integer.parseInt(nprobeEnv.trim());
+                System.out.printf("NPROBE env override: %d → %d%n", STORE.defaultNprobe, overrideNprobe);
+                STORE.defaultNprobe = overrideNprobe;
             }
-            return i;
+            System.out.printf("Loaded index (C=%d, nprobe=%d) in %d ms%n",
+                    STORE.numClusters, STORE.defaultNprobe,
+                    System.currentTimeMillis() - t);
+
+            t = System.currentTimeMillis();
+            System.out.println("Running JIT warmup (3 × 10k queries per worker)...");
+            java.util.concurrent.CountDownLatch latch =
+                    new java.util.concurrent.CountDownLatch(2);
+            for (int w = 0; w < 2; w++) {
+                worker.next().submit(() -> {
+                    warmup(STORE);
+                    warmup(STORE);
+                    warmup(STORE);
+                    warmupParser();
+                    latch.countDown();
+                });
+            }
+            latch.await();
+            System.out.printf("Warmup done in %d ms%n", System.currentTimeMillis() - t);
+
+            READY = true;
+            STORE.ready = true;
+            Files.writeString(Paths.get("/tmp/ready"), "OK");
+            System.out.println("Ready.");
+
+            channel.closeFuture().sync();
+        } finally {
+            boss.shutdownGracefully();
+            worker.shutdownGracefully();
         }
-        return -1;
     }
 
-    private static int contentLength(byte[] buf, int hdrEnd) {
-        int i = 0;
-        while (i < hdrEnd - 1) {
-            if (buf[i] == '\r' && buf[i + 1] == '\n') { i += 2; break; }
-            i++;
-        }
-        while (i <= hdrEnd - 16) {
-            if (iMatch(buf, i, "content-length:")) {
-                i += 16;
-                while (i < hdrEnd && buf[i] == ' ') i++;
-                int v = 0;
-                while (i < hdrEnd && buf[i] >= '0' && buf[i] <= '9') v = v * 10 + (buf[i++] - '0');
-                return v;
+    private static void warmup(IVFIndex store) {
+        float[] vec = new float[Config.DIMS];
+        long seed = 0x9E3779B97F4A7C15L;
+        int nprobe = store.defaultNprobe;
+
+        for (int i = 0; i < 10_000; i++) {
+            for (int d = 0; d < Config.DIMS; d++) {
+                seed ^= seed << 13;
+                seed ^= seed >>> 7;
+                seed ^= seed << 17;
+                vec[d] = Float.intBitsToFloat(((int) (seed >>> 41) & 0x007FFFFF) | 0x3F800000) - 1f;
             }
-            while (i < hdrEnd - 1) {
-                if (buf[i] == '\r' && buf[i + 1] == '\n') { i += 2; break; }
-                i++;
-            }
+            store.search(vec);
         }
-        return 0;
     }
 
-    private static boolean iMatch(byte[] b, int o, String s) {
-        for (int i = 0; i < s.length(); i++) {
-            if ((b[o + i] | 0x20) != (s.charAt(i) | 0x20)) return false;
+    private static void warmupParser() {
+        String body =
+                "{\"transaction\":{\"amount\":100.0,\"installments\":1,"
+                        + "\"requested_at\":\"2025-01-15T14:30:00Z\"},"
+                        + "\"customer\":{\"avg_amount\":200.0,\"tx_count_24h\":3,"
+                        + "\"known_merchants\":[\"merch-abc\"]},"
+                        + "\"merchant\":{\"id\":\"merch-abc\",\"mcc\":\"5812\","
+                        + "\"avg_amount\":150.0},"
+                        + "\"terminal\":{\"is_online\":false,\"card_present\":true,"
+                        + "\"km_from_home\":5.0},"
+                        + "\"last_transaction\":{\"timestamp\":\"2025-01-15T12:00:00Z\","
+                        + "\"km_from_current\":3.0}}";
+        byte[] bytes = body.getBytes(StandardCharsets.ISO_8859_1);
+        float[] scratch = new float[Config.DIMS];
+        for (int i = 0; i < 10_000; i++) {
+            Vectorizer.vectorize(bytes, bytes.length, scratch);
         }
-        return true;
+    }
+
+    @ChannelHandler.Sharable
+    static final class RequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+
+        static final RequestHandler INSTANCE = new RequestHandler();
+        private static final ThreadLocal<float[]> TL_VEC =
+                ThreadLocal.withInitial(() -> new float[Config.DIMS]);
+        private static final ThreadLocal<byte[]> TL_BYTES =
+                ThreadLocal.withInitial(() -> new byte[2048]);
+
+        @Override
+        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
+            if (!READY) {
+                ctx.writeAndFlush(HTTP_SERVICE_UNAVAILABLE.duplicate(), ctx.voidPromise());
+                return;
+            }
+
+            String uri = req.uri();
+            HttpMethod m = req.method();
+
+            if ("/fraud-score".equals(uri)) {
+                if (HttpMethod.POST.equals(m)) {
+                    handleFraudScore(ctx, req);
+                } else {
+                    ctx.writeAndFlush(HTTP_METHOD_NOT_ALLOWED.duplicate(), ctx.voidPromise());
+                }
+                return;
+            }
+
+            if ("/ready".equals(uri)) {
+                if (HttpMethod.GET.equals(m)) {
+                    ctx.writeAndFlush(HTTP_READY_OK.duplicate(), ctx.voidPromise());
+                } else {
+                    ctx.writeAndFlush(HTTP_METHOD_NOT_ALLOWED.duplicate(), ctx.voidPromise());
+                }
+                return;
+            }
+
+            ctx.writeAndFlush(HTTP_NOT_FOUND.duplicate(), ctx.voidPromise());
+        }
+
+        private static void handleFraudScore(ChannelHandlerContext ctx, FullHttpRequest req) {
+            ByteBuf content = req.content();
+            int len = content.readableBytes();
+            byte[] b = TL_BYTES.get();
+            if (len > b.length) {
+                b = new byte[(len + 511) & ~511];
+                TL_BYTES.set(b);
+            }
+            content.getBytes(content.readerIndex(), b, 0, len);
+
+            try {
+                float[] vec = TL_VEC.get();
+                Vectorizer.vectorize(b, len, vec);
+                int fraudCount = STORE.search(vec);
+                ctx.writeAndFlush(HTTP_OK[fraudCount].duplicate(), ctx.voidPromise());
+            } catch (Exception e) {
+                ctx.writeAndFlush(HTTP_BAD_REQUEST.duplicate(), ctx.voidPromise());
+            }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            ctx.close();
+        }
     }
 }

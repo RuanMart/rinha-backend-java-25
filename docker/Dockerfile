@@ -1,29 +1,40 @@
-FROM ghcr.io/graalvm/native-image-community:25 AS builder
-
+FROM maven:3.9-eclipse-temurin-25 AS builder
 WORKDIR /build
-
 COPY pom.xml .
 COPY src src
 COPY data data
+RUN mvn -q -T 1C package -DskipTests
 
-RUN microdnf install -y findutils
-
-ENV MAVEN_VERSION=3.9.9
-RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz | tar xz -C /opt && \
-    ln -s /opt/apache-maven-${MAVEN_VERSION}/bin/mvn /usr/local/bin/mvn
-
-ENV MAVEN_OPTS="-Xmx4g"
-
-RUN mvn -B package -DskipTests
-
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 && rm -rf /var/lib/apt/lists/*
-
+FROM eclipse-temurin:25-jre
 WORKDIR /app
-COPY --from=builder /build/target/rinha-2026-api ./app
-COPY --from=builder /build/src/main/resources/index.bin ./index.bin
+
+COPY --from=builder /build/target/rinha-2026-api-1.0.0.jar /app/app.jar
+COPY --from=builder /build/src/main/resources/index.bin /app/index.bin
 
 EXPOSE 8080
 
-CMD ["./app", "--enable-preview", "-R:MaxHeapSize=150m"]
+CMD java \
+    -server \
+    --add-modules jdk.incubator.vector \
+    --add-opens java.base/sun.misc=ALL-UNNAMED \
+    --sun-misc-unsafe-memory-access=allow \
+    -XX:+UseSerialGC \
+    -Xms128m -Xmx128m \
+    -XX:+AlwaysPreTouch \
+    -XX:+TieredCompilation \
+    -XX:CompileThreshold=500 \
+    -XX:Tier4CompileThreshold=250 \
+    -XX:+OptimizeStringConcat \
+    -XX:+DoEscapeAnalysis \
+    -XX:+EliminateAllocations \
+    -XX:+DisableExplicitGC \
+    -XX:MetaspaceSize=24m \
+    -XX:MaxMetaspaceSize=48m \
+    -Xss256k \
+    -XX:+UseCompressedOops \
+    -XX:+UseCompressedClassPointers \
+    -Dio.netty.allocator.type=pooled \
+    -Dio.netty.recycler.maxCapacityPerThread=4096 \
+    -Dio.netty.allocator.numHeapArenas=2 \
+    -Dio.netty.allocator.numDirectArenas=2 \
+    -cp /app/app.jar rinha.Main
