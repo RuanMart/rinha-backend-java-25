@@ -1,7 +1,7 @@
 package rinha.model;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class JsonParser {
 
@@ -78,7 +78,7 @@ public final class JsonParser {
             switch (key) {
                 case "avg_amount" -> c.avg_amount = parseDouble();
                 case "tx_count_24h" -> c.tx_count_24h = parseInt();
-                case "known_merchants" -> c.known_merchants = parseStringList();
+                case "known_merchants" -> c.known_merchants = parseStringSet();
                 default -> skipValue();
             }
         }
@@ -149,16 +149,16 @@ public final class JsonParser {
         return lt;
     }
 
-    private List<String> parseStringList() {
+    private Set<String> parseStringSet() {
         expect('[');
-        List<String> list = new ArrayList<>();
+        Set<String> set = new HashSet<>();
         while (true) {
             skipWs();
             if (peek() == ']') { pos++; break; }
             if (peek() == ',') { pos++; skipWs(); }
-            list.add(parseString());
+            set.add(parseString());
         }
-        return list;
+        return set;
     }
 
     private String parseString() {

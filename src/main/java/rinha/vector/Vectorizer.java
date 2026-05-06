@@ -30,7 +30,7 @@ public final class Vectorizer {
         v[4] = q(dayOfWeek(year, month, day) / 6.0);
 
         if (req.last_transaction != null && req.last_transaction.timestamp != null) {
-            long minDelta = (epochSec(ra) - epochSec(req.last_transaction.timestamp)) / 60;
+            long minDelta = Math.abs(epochSec(ra) - epochSec(req.last_transaction.timestamp)) / 60;
             v[5] = q(Config.clamp((double) minDelta / Config.MAX_MINUTES));
             v[6] = q(Config.clamp(req.last_transaction.km_from_current / Config.MAX_KM));
         } else {

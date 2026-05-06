@@ -1,6 +1,6 @@
 package rinha.model;
 
-import java.util.List;
+import java.util.Set;
 
 public final class FraudRequest {
 
@@ -20,7 +20,7 @@ public final class FraudRequest {
     public static final class Customer {
         public double avg_amount;
         public int tx_count_24h;
-        public List<String> known_merchants;
+        public Set<String> known_merchants;
     }
 
     public static final class Merchant {

@@ -25,4 +25,4 @@ COPY --from=builder /build/target/rinha-2026-api ./app
 
 EXPOSE 8080
 
-CMD ["./app", "--enable-preview", "-R:MaxHeapSize=120m"]
+CMD ["./app", "--enable-preview", "-R:MaxHeapSize=150m"]
