@@ -14,25 +14,19 @@ COPY --from=builder /build/src/main/resources/index.bin /app/index.bin
 EXPOSE 8080
 
 CMD ["java", \
-     "-server", \
      "--add-modules", "jdk.incubator.vector", \
      "--add-opens", "java.base/sun.misc=ALL-UNNAMED", \
      "--sun-misc-unsafe-memory-access=allow", \
      "-XX:+UseSerialGC", \
      "-Xms80m", "-Xmx80m", \
-     "-XX:+TieredCompilation", \
-     "-XX:CompileThreshold=500", \
-     "-XX:Tier4CompileThreshold=250", \
-     "-XX:+OptimizeStringConcat", \
-     "-XX:+DoEscapeAnalysis", \
-     "-XX:+EliminateAllocations", \
+     "-XX:TieredStopAtLevel=1", \
+     "-XX:InitialCodeCacheSize=4m", \
+     "-XX:ReservedCodeCacheSize=16m", \
      "-XX:+DisableExplicitGC", \
-     "-XX:MetaspaceSize=16m", \
-     "-XX:MaxMetaspaceSize=32m", \
+     "-XX:MetaspaceSize=12m", \
+     "-XX:MaxMetaspaceSize=24m", \
      "-Xss256k", \
-     "-XX:+UseCompressedOops", \
-     "-XX:+UseCompressedClassPointers", \
-     "-XX:MaxDirectMemorySize=8m", \
+     "-XX:MaxDirectMemorySize=4m", \
      "-Dio.netty.allocator.type=unpooled", \
      "-Dio.netty.recycler.maxCapacityPerThread=0", \
      "-Dio.netty.allocator.numHeapArenas=2", \
