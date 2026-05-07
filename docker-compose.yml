@@ -5,12 +5,6 @@ services:
       - INDEX_PATH=/app/index.bin
       - SERVER_PORT=8080
       - NPROBE=8
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ready"]
-      interval: 1s
-      timeout: 1s
-      retries: 60
-      start_period: 2s
     deploy:
       resources:
         limits:
@@ -25,12 +19,6 @@ services:
       - INDEX_PATH=/app/index.bin
       - SERVER_PORT=8080
       - NPROBE=8
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ready"]
-      interval: 1s
-      timeout: 1s
-      retries: 60
-      start_period: 2s
     deploy:
       resources:
         limits:
@@ -46,10 +34,8 @@ services:
     ports:
       - "9999:9999"
     depends_on:
-      api1:
-        condition: service_healthy
-      api2:
-        condition: service_healthy
+      - api1
+      - api2
     deploy:
       resources:
         limits:
