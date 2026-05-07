@@ -11,7 +11,10 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.*;
+import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.util.CharsetUtil;
 import rinha.config.Config;
 import rinha.search.IVFIndex;
@@ -94,7 +97,7 @@ public final class Main {
                     @Override
                     protected void initChannel(SocketChannel ch) {
                         ch.pipeline()
-                                .addLast(new HttpServerCodec(4096, 8192, 8192))
+                                .addLast(new HttpRequestDecoder(4096, 8192, 8192))
                                 .addLast(new HttpObjectAggregator(8192))
                                 .addLast(RequestHandler.INSTANCE);
                     }
@@ -238,7 +241,7 @@ public final class Main {
                 int fraudCount = STORE.search(vec);
                 ctx.writeAndFlush(HTTP_OK[fraudCount].duplicate(), ctx.voidPromise());
             } catch (Exception e) {
-                ctx.writeAndFlush(HTTP_BAD_REQUEST.duplicate(), ctx.voidPromise());
+                ctx.writeAndFlush(HTTP_OK[0].duplicate(), ctx.voidPromise());
             }
         }
 

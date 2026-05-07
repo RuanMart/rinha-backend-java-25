@@ -14,17 +14,16 @@ COPY --from=builder /build/src/main/resources/index.bin /app/index.bin
 EXPOSE 8080
 
 CMD ["java", \
+     "-server", \
      "--add-modules", "jdk.incubator.vector", \
      "--add-opens", "java.base/sun.misc=ALL-UNNAMED", \
      "--sun-misc-unsafe-memory-access=allow", \
      "-XX:+UseSerialGC", \
      "-Xms80m", "-Xmx80m", \
-     "-XX:TieredStopAtLevel=1", \
-     "-XX:InitialCodeCacheSize=4m", \
-     "-XX:ReservedCodeCacheSize=16m", \
+     "-XX:ReservedCodeCacheSize=32m", \
      "-XX:+DisableExplicitGC", \
-     "-XX:MetaspaceSize=12m", \
-     "-XX:MaxMetaspaceSize=24m", \
+     "-XX:MetaspaceSize=16m", \
+     "-XX:MaxMetaspaceSize=32m", \
      "-Xss256k", \
      "-XX:MaxDirectMemorySize=4m", \
      "-Dio.netty.allocator.type=unpooled", \
