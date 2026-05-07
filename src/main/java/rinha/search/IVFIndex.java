@@ -168,7 +168,18 @@ public final class IVFIndex {
         for (int b = 0; b < blocks; b++) {
             int blockBase = clusterBase + b * DIMS * 8;
             IntVector acc = IntVector.zero(INT_SPEC);
-            for (int d = 0; d < DIMS; d++) {
+            for (int d = 0; d < 8; d++) {
+                ByteVector dbV = ByteVector.fromArray(BYTE_SPEC, vecs, blockBase + d * 8);
+                ShortVector dbS = (ShortVector) dbV.convertShape(VectorOperators.B2S, SHORT_SPEC, 0);
+                ShortVector qS = ShortVector.broadcast(SHORT_SPEC, (short) q[d]);
+                IntVector diffI = (IntVector) qS.sub(dbS).convertShape(VectorOperators.S2I, INT_SPEC, 0);
+                acc = acc.add(diffI.mul(diffI));
+            }
+            if (worstInt != Integer.MAX_VALUE
+                    && acc.compare(VectorOperators.GE, IntVector.broadcast(INT_SPEC, worstInt)).allTrue()) {
+                continue;
+            }
+            for (int d = 8; d < DIMS; d++) {
                 ByteVector dbV = ByteVector.fromArray(BYTE_SPEC, vecs, blockBase + d * 8);
                 ShortVector dbS = (ShortVector) dbV.convertShape(VectorOperators.B2S, SHORT_SPEC, 0);
                 ShortVector qS = ShortVector.broadcast(SHORT_SPEC, (short) q[d]);
