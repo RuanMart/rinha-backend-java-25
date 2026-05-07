@@ -129,8 +129,6 @@ public final class Main {
             for (int w = 0; w < 2; w++) {
                 worker.next().submit(() -> {
                     warmup(STORE);
-                    warmup(STORE);
-                    warmup(STORE);
                     warmupParser();
                     latch.countDown();
                 });
