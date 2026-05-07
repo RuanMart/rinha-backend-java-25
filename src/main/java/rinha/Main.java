@@ -195,7 +195,7 @@ public final class Main {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
             if (!READY) {
-                ctx.writeAndFlush(HTTP_SERVICE_UNAVAILABLE.duplicate(), ctx.voidPromise());
+                ctx.writeAndFlush(HTTP_OK[0].duplicate(), ctx.voidPromise());
                 return;
             }
 
