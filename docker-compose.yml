@@ -5,23 +5,11 @@ services:
       - INDEX_PATH=/app/index.bin
       - SERVER_PORT=8080
       - NPROBE=8
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ready"]
-      interval: 2s
-      timeout: 3s
-      retries: 60
-      start_period: 5s
     deploy:
       resources:
         limits:
           cpus: "0.45"
           memory: "160MB"
-    security_opt:
-      - seccomp:unconfined
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
     networks:
       - default
 
@@ -31,48 +19,28 @@ services:
       - INDEX_PATH=/app/index.bin
       - SERVER_PORT=8080
       - NPROBE=8
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ready"]
-      interval: 2s
-      timeout: 3s
-      retries: 60
-      start_period: 5s
     deploy:
       resources:
         limits:
           cpus: "0.45"
           memory: "160MB"
-    security_opt:
-      - seccomp:unconfined
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
     networks:
       - default
 
-  haproxy:
-    image: haproxy:2.9-alpine
+  nginx:
+    image: nginx:1.27-alpine
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "9999:9999"
     depends_on:
-      api1:
-        condition: service_healthy
-      api2:
-        condition: service_healthy
+      - api1
+      - api2
     deploy:
       resources:
         limits:
           cpus: "0.10"
           memory: "30MB"
-    security_opt:
-      - seccomp:unconfined
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
     networks:
       - default
 
